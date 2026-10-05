@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/kiwi")
+@RequestMapping("/api/flight")
 public class KiwiServiceRest {
 
     @Autowired

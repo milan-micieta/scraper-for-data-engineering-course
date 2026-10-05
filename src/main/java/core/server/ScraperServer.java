@@ -1,5 +1,7 @@
 package core.server;
 
+import core.service.EventService;
+import core.service.EventServiceJPA;
 import core.service.FlightPriceService;
 import core.service.FlightPriceServiceJPA;
 import org.springframework.boot.SpringApplication;
@@ -17,5 +19,10 @@ public class ScraperServer {
     @Bean
     public FlightPriceService flightPriceService() {
         return new FlightPriceServiceJPA();
+    }
+
+    @Bean
+    public EventService eventService() {
+        return new EventServiceJPA();
     }
 }
