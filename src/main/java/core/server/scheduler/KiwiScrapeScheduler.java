@@ -16,18 +16,22 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Každých 15 minút (cron, konfigurovateľné) prejde všetky kombinácie odletové mesto x cieľ
- * a pre každý z nasledujúcich N dní (jednosmerná cesta, iba priame lety) uloží do tabuľky
- * flight_prices iba najlacnejšiu letenku daného dňa.
+ * Každých N minút (cron) prejde všetky ciele a pre každý z nasledujúcich dní (jednosmerná cesta,
+ * iba priame lety) spraví JEDNO vyhľadávanie zo všetkých odletových miest naraz.
+ * Z výsledkov uloží do flight_prices najlacnejšiu letenku za každú krajinu odletu.
  *
  * Konfigurácia (slugy skopíruj z URL na kiwi.com):
- *   kiwi.scrape.origins=kosice-slovakia,vienna-austria,budapest-hungary
+ *   kiwi.scrape.origins=kosice-slovakia,bratislava-slovakia,vienna-austria,budapest-hungary
  *   kiwi.scrape.destinations=london-united-kingdom
- *   kiwi.scrape.start-date=2026-11-15      (prázdne = zajtra)
+ *   kiwi.scrape.start-offset-days=1        (0 = od dnes, 1 = od zajtra; okno sa každý deň posúva)
+ *   kiwi.scrape.start-date=2026-11-15      (voliteľné; ak je zadané, okno sa neposúva)
  *   kiwi.scrape.days=7
  */
 @Component
@@ -45,8 +49,13 @@ public class KiwiScrapeScheduler {
     @Value("${kiwi.scrape.destinations:}")
     private List<String> destinations;
 
+    /** Pevný začiatok okna. Prázdne = okno sa posúva podľa start-offset-days. */
     @Value("${kiwi.scrape.start-date:}")
     private String startDate;
+
+    /** Od koľkého dňa od dnešku sa zbiera (0 = dnes, 1 = zajtra). */
+    @Value("${kiwi.scrape.start-offset-days:1}")
+    private int startOffsetDays;
 
     /** Pre koľko po sebe idúcich dní zbierať ceny. */
     @Value("${kiwi.scrape.days:7}")
@@ -63,21 +72,33 @@ public class KiwiScrapeScheduler {
 
     @Scheduled(cron = "${kiwi.scrape.cron:0 */15 * * * *}")
     public void scrapeAllRoutes() {
-        if (origins == null || origins.isEmpty() || destinations == null || destinations.isEmpty()) {
+        List<String> cleanOrigins = clean(origins);
+        List<String> cleanDestinations = clean(destinations);
+        if (cleanOrigins.isEmpty() || cleanDestinations.isEmpty()) {
             log.warn("kiwi.scrape.origins / kiwi.scrape.destinations nie sú nastavené, nič nescrapujem");
             return;
         }
+        // všetky odletové mestá v jednej URL: a,b,c
+        String originsSlug = String.join(",", cleanOrigins);
+
         LocalDate first = (startDate == null || startDate.isBlank())
-                ? LocalDate.now().plusDays(1)
+                ? LocalDate.now().plusDays(startOffsetDays)
                 : LocalDate.parse(startDate.trim());
 
         try {
-            for (String origin : origins) {
-                for (String dest : destinations) {
-                    if (origin.isBlank() || dest.isBlank() || origin.trim().equals(dest.trim())) {
+            for (String dest : cleanDestinations) {
+                for (int i = 0; i < days; i++) {
+                    LocalDate date = first.plusDays(i);
+                    if (date.isBefore(LocalDate.now())) {
                         continue;
                     }
-                    scrapeRoute(origin.trim(), dest.trim(), first);
+                    try {
+                        scrapeDay(originsSlug, dest, date);
+                    } catch (Exception e) {
+                        // chyba jedného dňa nesmie zastaviť ostatné ani budúce behy
+                        log.error("Scraping {} -> {} na {} zlyhal", originsSlug, dest, date, e);
+                    }
+                    Thread.sleep(delaySeconds * 1000);
                 }
             }
         } catch (InterruptedException e) {
@@ -85,49 +106,61 @@ public class KiwiScrapeScheduler {
         }
     }
 
-    private void scrapeRoute(String origin, String dest, LocalDate first) throws InterruptedException {
-        for (int i = 0; i < days; i++) {
-            LocalDate date = first.plusDays(i);
-            if (date.isBefore(LocalDate.now())) {
+    private void scrapeDay(String originsSlug, String dest, LocalDate date) throws Exception {
+        String json = pythonService.runKiwiScraper(originsSlug, dest, date.toString());
+        ScrapeResult result = objectMapper.readValue(json, ScrapeResult.class);
+
+        if (result.offers() == null || result.offers().isEmpty()) {
+            log.warn("{} -> {} {}: scraper nevrátil žiadne ponuky", originsSlug, dest, date);
+            return;
+        }
+
+        // najlacnejšia ponuka za každú krajinu odletu
+        // (ak scraper krajinu nezistil, všetky ponuky padnú do jednej skupiny "")
+        Map<String, Offer> cheapestPerCountry = new LinkedHashMap<>();
+        for (Offer o : result.offers()) {
+            if (o.price() == null) {
                 continue;
             }
-            try {
-                scrapeDay(origin, dest, date);
-            } catch (Exception e) {
-                // chyba jedného dňa nesmie zastaviť ostatné ani budúce behy
-                log.error("Scraping {} -> {} na {} zlyhal", origin, dest, date, e);
-            }
-            Thread.sleep(delaySeconds * 1000);
+            String key = o.originCountry() == null ? "" : o.originCountry();
+            cheapestPerCountry.merge(key, o,
+                    (a, b) -> a.price().compareTo(b.price()) <= 0 ? a : b);
+        }
+        if (cheapestPerCountry.size() == 1 && cheapestPerCountry.containsKey("")) {
+            log.warn("{} -> {} {}: scraper nezistil krajinu odletu, ukladám len jednu najlacnejšiu ponuku",
+                    originsSlug, dest, date);
+        }
+
+        Instant scrapedAt = result.scrapedAt() != null ? Instant.parse(result.scrapedAt()) : Instant.now();
+        List<FlightPrice> entities = new ArrayList<>();
+        for (Offer o : cheapestPerCountry.values()) {
+            FlightPrice fp = new FlightPrice();
+            fp.setScrapedAt(scrapedAt);
+            fp.setOrigin(originLabel(o, originsSlug));
+            fp.setDestination(dest);
+            fp.setDepartureTime(parseDeparture(o.departureTime(), date.atStartOfDay()));
+            fp.setPrice(o.price());
+            fp.setCurrency(o.currency());
+            entities.add(fp);
+        }
+
+        flightPriceService.addFlightTicket(entities);
+        for (FlightPrice fp : entities) {
+            log.info("{} -> {} {}: najlacnejšia {} {}", fp.getOrigin(), dest,
+                    date, fp.getPrice(), fp.getCurrency());
         }
     }
 
-    private void scrapeDay(String origin, String dest, LocalDate date) throws Exception {
-        String json = pythonService.runKiwiScraper(origin, dest, date.toString());
-        ScrapeResult result = objectMapper.readValue(json, ScrapeResult.class);
-
-        if (result.offers() == null) {
-            log.warn("{} -> {} {}: scraper nevrátil žiadne ponuky", origin, dest, date);
-            return;
+    private static List<String> clean(List<String> values) {
+        List<String> out = new ArrayList<>();
+        if (values != null) {
+            for (String v : values) {
+                if (v != null && !v.isBlank()) {
+                    out.add(v.trim());
+                }
+            }
         }
-        Offer cheapest = result.offers().stream()
-                .filter(o -> o.price() != null)
-                .min(Comparator.comparing(Offer::price))
-                .orElse(null);
-        if (cheapest == null) {
-            log.warn("{} -> {} {}: scraper nevrátil žiadne ponuky", origin, dest, date);
-            return;
-        }
-
-        FlightPrice fp = new FlightPrice();
-        fp.setScrapedAt(result.scrapedAt() != null ? Instant.parse(result.scrapedAt()) : Instant.now());
-        fp.setOrigin(origin);
-        fp.setDestination(dest);
-        fp.setDepartureTime(parseDeparture(cheapest.departureTime(), date.atStartOfDay()));
-        fp.setPrice(cheapest.price());
-        fp.setCurrency(cheapest.currency());
-
-        flightPriceService.addFlightTicket(List.of(fp));
-        log.info("{} -> {} {}: najlacnejšia {} {}", origin, dest, date, fp.getPrice(), fp.getCurrency());
+        return out;
     }
 
     private static LocalDateTime parseDeparture(String value, LocalDateTime fallback) {
@@ -147,11 +180,27 @@ public class KiwiScrapeScheduler {
         }
     }
 
+    private static String originLabel(Offer o, String fallback) {
+        String city = o.originCity() == null ? "" : o.originCity().trim();
+        String country = o.originCountry() == null ? "" : o.originCountry().trim();
+        if (city.isBlank() && country.isBlank()) {
+            return fallback;
+        }
+        if (city.isBlank()) {
+            return country;
+        }
+        if (country.isBlank()) {
+            return city;
+        }
+        return city + ", " + country;
+    }
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ScrapeResult(String scrapedAt, List<Offer> offers) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Offer(BigDecimal price, String currency, String id, String bookingUrl, String departureTime) {
+    record Offer(BigDecimal price, String currency, String id, String bookingUrl, String departureTime,
+                 String originCode, String originCity, String originCountry) {
     }
 }

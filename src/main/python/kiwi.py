@@ -8,6 +8,8 @@ Inštalácia:
 
 Použitie:
     python kiwi_scraper.py kosice-slovakia london-united-kingdom 2026-11-15
+    python kiwi_scraper.py budapest-hungary,vienna-austria,kosice-slovakia london-united-kingdom 2026-11-18
+                                                         # viac odletových miest naraz (oddelené čiarkou)
     python kiwi_scraper.py ... --headed                  # zobrazí okno prehliadača (ladenie)
     python kiwi_scraper.py ... --json --no-csv           # režim pre Spring (JSON na stdout)
     python kiwi_scraper.py ... --dump-graphql g.json     # uloží surové GraphQL odpovede (ladenie času odletu)
@@ -26,7 +28,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 CSV_PATH = Path("prices.csv")
-CSV_HEADER = ["scraped_at", "origin", "dest", "departure_time", "price", "currency"]
+CSV_HEADER = ["scraped_at", "origin", "origin_country", "dest", "departure_time", "price", "currency"]
 
 
 def build_url(origin, dest, depart):
@@ -62,6 +64,22 @@ def find_departure(itinerary):
     return ""
 
 
+def find_origin(itinerary):
+    """Odletové letisko/mesto/krajina prvého segmentu itinerára (best-effort)."""
+    for sub in walk(itinerary):
+        src = sub.get("source")
+        if isinstance(src, dict) and src.get("localTime"):
+            station = src.get("station") or {}
+            city = station.get("city") or {}
+            country = station.get("country") or city.get("country") or {}
+            return {
+                "code": station.get("code") or "",
+                "city": city.get("name") or station.get("name") or "",
+                "country": country.get("name") or country.get("code") or "",
+            }
+    return {"code": "", "city": "", "country": ""}
+
+
 def extract_from_json(payload):
     """Nájde itineráre s cenou v GraphQL odpovedi (štruktúra sa môže meniť)."""
     found = []
@@ -74,8 +92,12 @@ def extract_from_json(payload):
                 amount = float(price["amount"])
             except (TypeError, ValueError):
                 continue
+            origin_info = find_origin(d)
             found.append({
                 "price": amount,
+                "origin_code": origin_info["code"],
+                "origin_city": origin_info["city"],
+                "origin_country": origin_info["country"],
                 "currency": price.get("currency") or "EUR",
                 "id": d.get("id", ""),
                 "departure_time": find_departure(d),
@@ -145,6 +167,7 @@ def scrape(url, depart, headed=False, timeout_ms=45000, dump_path=None):
                     departure = f"{depart}T{tm.group(0).zfill(5)}:00.000Z" if tm else ""
                     try:
                         captured.append({"price": float(raw), "currency": "EUR", "id": "",
+                                         "origin_code": "", "origin_city": "", "origin_country": "",
                                          "departure_time": departure, "booking_url": ""})
                     except ValueError:
                         pass
@@ -154,16 +177,19 @@ def scrape(url, depart, headed=False, timeout_ms=45000, dump_path=None):
         Path(dump_path).write_text(json.dumps(raw_dump, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"Surové GraphQL odpovede uložené do {Path(dump_path).resolve()}", file=sys.stderr)
 
-    # jedna (najlacnejšia) ponuka na každý odlet; ponuky bez známeho času nezlučujeme
+    # jedna (najlacnejšia) ponuka na každý odlet z daného letiska; ponuky bez známeho času nezlučujeme
     best = {}
     for r in captured:
-        key = r["departure_time"] or (r["id"], r["price"])
+        if r["departure_time"]:
+            key = (r["origin_code"] or r["origin_city"], r["departure_time"])
+        else:
+            key = (r["id"], r["price"])
         if key not in best or r["price"] < best[key]["price"]:
             best[key] = r
     return sorted(best.values(), key=lambda r: r["price"])
 
 
-def save_csv(rows, origin, dest, depart):
+def save_csv(rows, origin, dest, depart):  # origin = zadaný slug(y), použije sa ak mesto nepoznáme
     # starý prices.csv bez stĺpca departure_time by sa pomiešal s novým formátom
     if CSV_PATH.exists():
         with CSV_PATH.open(encoding="utf-8") as f:
@@ -182,7 +208,8 @@ def save_csv(rows, origin, dest, depart):
         for r in rows:
             # ak čas odletu nepoznáme, uložíme aspoň deň odletu (polnoc)
             departure = r["departure_time"] or f"{depart}T00:00:00.000Z"
-            w.writerow([now, origin, dest, departure, r["price"], r["currency"]])
+            w.writerow([now, r["origin_city"] or origin, r["origin_country"], dest, departure,
+                        r["price"], r["currency"]])
 
 
 def main():
@@ -222,6 +249,9 @@ def main():
                     "currency": r["currency"],
                     "id": r["id"],
                     "departureTime": r["departure_time"],
+                    "originCode": r["origin_code"],
+                    "originCity": r["origin_city"],
+                    "originCountry": r["origin_country"],
                     "bookingUrl": r["booking_url"],
                 }
                 for r in rows
@@ -232,7 +262,8 @@ def main():
     else:
         print(f"\nNájdených {len(rows)} ponúk. Top 10 najlacnejších:")
         for r in rows[:10]:
-            print(f"  {r['price']:.2f} {r['currency']}  {r['departure_time'] or '(čas neznámy)'}")
+            print(f"  {r['price']:.2f} {r['currency']}  {r['departure_time'] or '(čas neznámy)'}"
+                  f"  {r['origin_city']} {r['origin_country']}".rstrip())
 
     if not args.no_csv:
         save_csv(rows, args.origin, args.dest, args.depart)
