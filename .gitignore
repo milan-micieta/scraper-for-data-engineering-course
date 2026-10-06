@@ -37,3 +37,10 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+# Local database credentials
+src/main/resources/application-local.properties
+
+# Python virtual environment
+.venv/
+__pycache__/
