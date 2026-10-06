@@ -43,7 +43,7 @@ public class FlightPrice {
     @Column(length = 10)
     private String currency;
 
-    @Column(name = "source", columnDefinition = "VARCHAR(20) DEFAULT 'kiwi'")
+    @Column(name = "source", length = 20)
     private String source = "kiwi";
 
     @Column(name = "scraped_at", nullable = false)

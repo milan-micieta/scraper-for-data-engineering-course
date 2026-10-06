@@ -1,0 +1,10 @@
+@host = http://147.232.205.238:8081
+
+### Kontrola, že server beží
+GET {{host}}/actuator/health
+
+### scraper: história ceny jedného letu
+GET http://147.232.205.238:8081/api/flight/flight-ticket?origin=Vienna%2C%20Austria&destination=milan-italy&departureTime=2026-11-15T22:05:00
+
+### scraper: história ceny jedného letu
+GET http://scraper.svra-windows-desktop-0090.virtual.cloud.tuke.sk/api/flight/flight-ticket?destination=milan-italy
