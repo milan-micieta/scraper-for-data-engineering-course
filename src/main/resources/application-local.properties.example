@@ -1,0 +1,4 @@
+spring.datasource.username=YOUR_DB_USER
+spring.datasource.password=YOUR_DB_PASSWORD
+kiwi.python.exe=.venv/bin/python
+# Windows: kiwi.python.exe=.venv/Scripts/python.exe

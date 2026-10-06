@@ -31,6 +31,10 @@ public class PythonService {
      */
     public String runKiwiScraper(String origin, String dest, String depart) throws Exception {
         List<String> cmd = List.of(pythonExe, pythonScript, origin, dest, depart, "--json", "--no-csv");
+        return run(cmd, timeoutSeconds);
+    }
+
+    public String run(List<String> cmd, long timeoutSeconds) throws Exception {
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectError(ProcessBuilder.Redirect.INHERIT);
@@ -50,10 +54,10 @@ public class PythonService {
 
         if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly();
-            throw new RuntimeException("Kiwi scraper prekročil limit " + timeoutSeconds + " s");
+            throw new RuntimeException("Python scraper prekročil limit " + timeoutSeconds + " s");
         }
         if (process.exitValue() != 0) {
-            throw new RuntimeException("Kiwi scraper skončil s kódom " + process.exitValue());
+            throw new RuntimeException("Python scraper skončil s kódom " + process.exitValue());
         }
         return stdout.get(10, TimeUnit.SECONDS);
     }
