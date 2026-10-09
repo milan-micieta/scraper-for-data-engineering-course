@@ -26,7 +26,8 @@ public class KiwiServiceRest {
                                              @RequestParam(required = false) String destination,
                                              @RequestParam(required = false)
                                              @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-                                             LocalDate departureDate) {
-        return flightPriceService.getFlightTicket(origin, destination, departureDate);
+                                             LocalDate departureDate,
+                                             @RequestParam(required = false) String source) {
+        return flightPriceService.getFlightTicket(origin, destination, departureDate, source);
     }
 }

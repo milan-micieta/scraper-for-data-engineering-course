@@ -8,6 +8,6 @@ import java.util.List;
 
 public interface FlightPriceService {
     void addFlightTicket(List<FlightPrice> prices);
-    List<FlightPrice> getFlightTicket(String origin, String destination, LocalDate departureDate);
+    List<FlightPrice> getFlightTicket(String origin, String destination, LocalDate departureDate, String source);
 
 }

@@ -35,6 +35,15 @@ Pre samotnu La Scalu nastav kiwi.scrape.cron=-.
 Zdroj: https://www.teatroallascala.org/en/tickets.html
 Pokrytie: vsetky terminy publikovane na tejto stranke, nie cely archiv divadla.
 
+## Ryanair
+Ryanair zbiera priame jednosmerne lety z Viedne (VIE), Budapesti (BUD),
+Bratislavy (BTS) a Kosic (KSC) do Londyna-Stansted (STN) na nasledujucich
+60 dni, v minutach 00, 15, 30 a 45 kazdej hodiny. Ceny vypisuje priebezne.
+Verejne ceny sa zbieraju po 5-dnovych oknach s 5-sekundovou pauzou medzi poziadavkami.
+Zaznamy idu do `flight_prices` s `source = ryanair`; na API ich vyfiltruj
+parametrom `source=ryanair`. Ciel sa uklada pod rovnakym oznacenim ako pri Kiwi:
+`london-united-kingdom`. 
+
 ## Simulovane predane listky
 sold_tickets = NULL, sold_tickets_status = NOT_PUBLISHED: realne predaje nie su zname.
 simulated_sold_tickets = NAHODNE TESTOVACIE DATA, nie odhad predaja.
