@@ -25,13 +25,17 @@ public class FlightPriceServiceJPA implements FlightPriceService {
     }
 
     @Override
-    public List<FlightPrice> getFlightTicket(String origin, String destination, LocalDate departureDate) {
+    public List<FlightPrice> getFlightTicket(String origin, String destination, LocalDate departureDate,
+                                             String source) {
         StringBuilder jpql = new StringBuilder("SELECT f FROM FlightPrice f WHERE 1 = 1");
         if (origin != null && !origin.isBlank()) {
             jpql.append(" AND f.origin = :origin");
         }
         if (destination != null && !destination.isBlank()) {
             jpql.append(" AND f.destination = :destination");
+        }
+        if (source != null && !source.isBlank()) {
+            jpql.append(" AND f.source = :source");
         }
         if (departureDate != null) {
             jpql.append(" AND f.departureTime >= :from AND f.departureTime < :to");
@@ -44,6 +48,9 @@ public class FlightPriceServiceJPA implements FlightPriceService {
         }
         if (destination != null && !destination.isBlank()) {
             query.setParameter("destination", destination);
+        }
+        if (source != null && !source.isBlank()) {
+            query.setParameter("source", source);
         }
         if (departureDate != null) {
             query.setParameter("from", departureDate.atStartOfDay());
