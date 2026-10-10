@@ -21,6 +21,7 @@ public class LaScalaScrapeScheduler {
     private static final Logger log = LoggerFactory.getLogger(LaScalaScrapeScheduler.class);
     private final PythonService python;
     private final LaScalaStorage storage;
+    private final LaScalaWebhookNotifier webhookNotifier;
     private final ObjectMapper mapper;
     private final AtomicBoolean running = new AtomicBoolean();
 
@@ -39,10 +40,12 @@ public class LaScalaScrapeScheduler {
     @Value("${lascala.simulation.seed:42}")
     private long simulationSeed;
 
-    public LaScalaScrapeScheduler(PythonService python, LaScalaStorage storage, ObjectMapper mapper) {
+    public LaScalaScrapeScheduler(PythonService python, LaScalaStorage storage, ObjectMapper mapper,
+                                  LaScalaWebhookNotifier webhookNotifier) {
         this.python = python;
         this.storage = storage;
         this.mapper = mapper;
+        this.webhookNotifier = webhookNotifier;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -74,6 +77,7 @@ public class LaScalaScrapeScheduler {
                 event.setSourceUrl(batch.sourceUrl());
             }
             storage.save(batch.events());
+            webhookNotifier.notify(batch.scrapedAt(), batch.sourceUrl(), batch.events());
             log.info("La Scala: saved {} performance snapshots with zone prices; tickets sold are not published", batch.events().size());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
