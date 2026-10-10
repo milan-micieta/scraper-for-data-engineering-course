@@ -24,7 +24,7 @@ public class LaScalaScrapeScheduler {
     private final ObjectMapper mapper;
     private final AtomicBoolean running = new AtomicBoolean();
 
-    @Value("${lascala.python.exe:${kiwi.python.exe:python3}}")
+    @Value("${python.exe:${kiwi.python.exe:python3}}")
     private String pythonExe;
     @Value("${lascala.python.script:src/main/python/la_scala.py}")
     private String script;

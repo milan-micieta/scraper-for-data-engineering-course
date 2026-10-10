@@ -38,8 +38,9 @@ build/
 ### Mac OS ###
 .DS_Store
 
-# Local database credentials
+# Database credentials
 src/main/resources/application-local.properties
+/src/main/resources/application-prod.properties
 
 # Python virtual environment
 .venv/

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import core.entity.FlightPrice;
 import core.service.FlightPriceService;
+import core.service.FlightTicketSalesGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,6 +43,7 @@ public class KiwiScrapeScheduler {
     private PythonService pythonService;
     private FlightPriceService flightPriceService;
     private ObjectMapper objectMapper = new ObjectMapper();
+    private final FlightTicketSalesGenerator salesGenerator;
 
     @Value("${kiwi.scrape.origins:}")
     private List<String> origins;
@@ -65,9 +67,11 @@ public class KiwiScrapeScheduler {
     @Value("${kiwi.scrape.delay-seconds:5}")
     private long delaySeconds;
 
-    public KiwiScrapeScheduler(PythonService pythonService, FlightPriceService flightPriceService) {
+    public KiwiScrapeScheduler(PythonService pythonService, FlightPriceService flightPriceService,
+                               FlightTicketSalesGenerator salesGenerator) {
         this.pythonService = pythonService;
         this.flightPriceService = flightPriceService;
+        this.salesGenerator = salesGenerator;
     }
 
     @Scheduled(cron = "${kiwi.scrape.cron:0 */15 * * * *}")
@@ -144,6 +148,7 @@ public class KiwiScrapeScheduler {
             entities.add(fp);
         }
 
+        salesGenerator.generate(entities);
         flightPriceService.addFlightTicket(entities);
         for (FlightPrice fp : entities) {
             log.info("{} -> {} {}: najlacnejšia {} {}", fp.getOrigin(), dest,

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import core.entity.FlightPrice;
 import core.service.FlightPriceService;
+import core.service.FlightTicketSalesGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,10 +30,11 @@ public class RyanairScrapeScheduler {
 
     private final PythonService python;
     private final FlightPriceService flightPriceService;
+    private final FlightTicketSalesGenerator salesGenerator;
     private final ObjectMapper mapper = new ObjectMapper();
     private final AtomicBoolean running = new AtomicBoolean();
 
-    @Value("${kiwi.python.exe:python}")
+    @Value("${python.exe:python}")
     private String pythonExe;
     @Value("${ryanair.python.script:src/main/python/ryanair.py}")
     private String script;
@@ -53,9 +55,11 @@ public class RyanairScrapeScheduler {
     @Value("${ryanair.scrape.delay-seconds:5.0}")
     private double delaySeconds;
 
-    public RyanairScrapeScheduler(PythonService python, FlightPriceService flightPriceService) {
+    public RyanairScrapeScheduler(PythonService python, FlightPriceService flightPriceService,
+                                  FlightTicketSalesGenerator salesGenerator) {
         this.python = python;
         this.flightPriceService = flightPriceService;
+        this.salesGenerator = salesGenerator;
     }
 
     @Scheduled(cron = "${ryanair.scrape.cron:0 */15 * * * *}")
@@ -84,11 +88,16 @@ public class RyanairScrapeScheduler {
                 command.addAll(List.of("--start-date", startDate.trim()));
             }
 
+            log.info("Ryanair scrape started: {} -> {}, {} days, script {}",
+                    cleanOrigins, cleanDestinations, days, script);
             AtomicInteger completedWindows = new AtomicInteger();
             AtomicInteger savedPrices = new AtomicInteger();
             python.runStreaming(command, timeoutSeconds, line -> {
-                savedPrices.addAndGet(saveWindow(line));
+                int savedInWindow = saveWindow(line);
+                savedPrices.addAndGet(savedInWindow);
                 completedWindows.incrementAndGet();
+                log.info("Ryanair window {} completed: saved {} fare(s)",
+                        completedWindows.get(), savedInWindow);
             });
             if (completedWindows.get() == 0) {
                 throw new IllegalArgumentException("Ryanair returned no search windows");
@@ -135,6 +144,7 @@ public class RyanairScrapeScheduler {
             prices.add(price);
         }
         if (!prices.isEmpty()) {
+            salesGenerator.generate(prices);
             flightPriceService.addFlightTicket(prices);
             for (FlightPrice price : prices) {
                 log.info("{} -> {} {}: najlacnejšia {} {}", price.getOrigin(),

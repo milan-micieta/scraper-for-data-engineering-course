@@ -193,6 +193,13 @@ def scrape(origins, destinations, start_date, days=60, delay_seconds=1.0, on_bat
     offers = []
     offer_count = 0
     failed_windows = 0
+    print(
+        "Ryanair scrape started: origins=%s destinations=%s dates=%s..%s (%d windows)" % (
+            ",".join(origins), ",".join(destinations), start_date, end_date, len(windows),
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -306,6 +313,23 @@ def scrape(origins, destinations, start_date, days=60, delay_seconds=1.0, on_bat
                             )
                             continue
                         offer_count += len(window_offers)
+                        print(
+                            "Ryanair %s -> %s %s..%s: found %d direct fare(s)" % (
+                                origin, destination, window_start, window_end, len(window_offers),
+                            ),
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        for offer in window_offers:
+                            print(
+                                "Ryanair offer: %s -> %s %s %s %s (flight %s)" % (
+                                    offer["originCode"], offer["destinationCode"],
+                                    offer["departureTime"], offer["price"],
+                                    offer["currency"], offer["id"] or "unknown",
+                                ),
+                                file=sys.stderr,
+                                flush=True,
+                            )
                         if on_batch is None:
                             offers.extend(window_offers)
                         if not window_offers:

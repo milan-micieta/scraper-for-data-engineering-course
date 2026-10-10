@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
 @Service
 public class PythonService {
 
-    @Value("${kiwi.python.exe:python}")
+    @Value("${python.exe:python}")
     private String pythonExe;
 
     @Value("${kiwi.python.script}")

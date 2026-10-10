@@ -6,7 +6,7 @@ not total capacity or tickets sold. Prices are published tariffs, including
 zones with no online seats left. No ticket purchasing or seat reservation.
 """
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import html
 import hashlib
@@ -17,7 +17,10 @@ import sys
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
-from zoneinfo import ZoneInfo
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9
+    ZoneInfo = None
 
 PAGE_URL = "https://www.teatroallascala.org/en/tickets.html"
 
@@ -26,6 +29,87 @@ def fetch(url):
     request = Request(url, headers={"User-Agent": "LaScalaCourseScraper/1.0", "Accept": "application/json,text/html"})
     with urlopen(request, timeout=30) as response:
         return response.read().decode("utf-8-sig")
+
+
+def _last_sunday(year, month):
+    d = datetime(year, month, 31)  # marec aj október majú 31 dní
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+
+def rome_aware(naive):
+    """Lokálny čas divadla -> aware datetime. Funguje aj bez balíčka tzdata (Windows)."""
+    if ZoneInfo is not None:
+        try:
+            return naive.replace(tzinfo=ZoneInfo("Europe/Rome"))
+        except Exception:
+            pass
+    start = _last_sunday(naive.year, 3).replace(hour=2)
+    end = _last_sunday(naive.year, 10).replace(hour=3)
+    hours = 2 if start <= naive < end else 1
+    return naive.replace(tzinfo=timezone(timedelta(hours=hours)))
+
+
+def try_accept_cookies(page):
+    for label in ("Accept all", "Accept", "Agree", "Accetta", "Prijať"):
+        try:
+            page.get_by_role("button", name=re.compile(label, re.I)).first.click(timeout=1500)
+            return
+        except Exception:
+            continue
+
+
+def check_feed_host(url):
+    if urlparse(url).netloc != urlparse(PAGE_URL).netloc:
+        raise ValueError("Unexpected calendar host")
+
+
+def fetch_feed_browser(headed=False, timeout_ms=45000):
+    """Ako Kiwi scraper: skutočný Chromium. Vráti (feed_url, text odpovede)."""
+    from playwright.sync_api import sync_playwright  # import až tu, aby testy nepotrebovali Playwright
+    captured = {}
+
+    def on_response(resp):
+        if "eventcalendarsalesprices" in resp.url.lower() and resp.status == 200 and "url" not in captured:
+            try:
+                captured["text"] = resp.text()
+                captured["url"] = resp.url
+            except Exception:
+                pass
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=not headed)
+        try:
+            ctx = browser.new_context(
+                locale="en-GB",
+                viewport={"width": 1366, "height": 900},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+            )
+            page = ctx.new_page()
+            page.on("response", on_response)
+            page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+            try_accept_cookies(page)
+            for _ in range(int(timeout_ms / 500)):
+                if captured:
+                    break
+                page.wait_for_timeout(500)
+            if not captured:
+                # stránka feed nezavolala sama: nájdi ho v HTML a stiahni cez kontext prehliadača (cookies)
+                feed = discover_feed(page.content())
+                r = ctx.request.get(feed, headers={"Referer": PAGE_URL, "Accept": "application/json"},
+                                    timeout=timeout_ms)
+                if not r.ok:
+                    raise ValueError("Calendar feed HTTP %s" % r.status)
+                captured["url"], captured["text"] = feed, r.text()
+        finally:
+            browser.close()
+    check_feed_host(captured["url"])
+    return captured["url"], captured["text"]
+
+
+def fetch_feed_plain():
+    source = discover_feed(fetch(PAGE_URL))
+    return source, fetch(source)
 
 
 def discover_feed(page):
@@ -93,9 +177,7 @@ def parse_payload(payload, source_url, scraped_at=None):
         title = clean_title(row["cntTitle"])
         if not title:
             raise ValueError("Missing event title")
-        # The page renders evtDateOffset as local theatre time. The alternate
-        # evtDateOffset2 field sometimes has an inconsistent winter UTC offset.
-        start = datetime.strptime(row["evtDateOffset"], "%d/%m/%Y %H:%M").replace(tzinfo=ZoneInfo("Europe/Rome"))
+        start = rome_aware(datetime.strptime(row["evtDateOffset"], "%d/%m/%Y %H:%M"))
         events.append({
             "eventId": str(event_id), "title": title, "category": row.get("navDescr"),
             "startsAt": start.isoformat(), "timeZone": "Europe/Rome",
@@ -113,7 +195,6 @@ def parse_payload(payload, source_url, scraped_at=None):
 
 
 def simulate_sales(events, capacity=2000, seed=42):
-    """Reproducible synthetic totals, unrelated to real availability or sales."""
     if capacity < 0 or capacity > 2147483647:
         raise ValueError("Simulation capacity must be between 0 and 2147483647")
     for event in events:
@@ -127,16 +208,23 @@ def simulate_sales(events, capacity=2000, seed=42):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="JSON output (default)")
+    parser.add_argument("--no-browser", action="store_true", help="bez Playwrightu (len urllib)")
+    parser.add_argument("--headed", action="store_true", help="zobrazí okno prehliadača (ladenie)")
+    parser.add_argument("--dump-feed", metavar="SÚBOR", help="uloží surovú odpoveď kalendára (ladenie)")
     parser.add_argument("--simulate-sales", action="store_true")
     parser.add_argument("--simulation-capacity", type=int, default=2000)
     parser.add_argument("--simulation-seed", type=int, default=42)
     args = parser.parse_args()
     try:
-        source = discover_feed(fetch(PAGE_URL))
-        result = parse_payload(json.loads(fetch(source)), source)
+        source, text = fetch_feed_plain() if args.no_browser else fetch_feed_browser(headed=args.headed)
+        if args.dump_feed:
+            with open(args.dump_feed, "w", encoding="utf-8") as f:
+                f.write(text)
+        result = parse_payload(json.loads(text.lstrip("\ufeff")), source)
         if args.simulate_sales:
             simulate_sales(result["events"], args.simulation_capacity, args.simulation_seed)
-        print(json.dumps(result, ensure_ascii=False))
+        sys.stdout.write(json.dumps(result, ensure_ascii=True))
+        sys.stdout.flush()
         print("La Scala: fetched %d events; tickets sold are not published." % len(result["events"]), file=sys.stderr)
     except Exception as exc:
         print("La Scala scrape failed: %s" % exc, file=sys.stderr)

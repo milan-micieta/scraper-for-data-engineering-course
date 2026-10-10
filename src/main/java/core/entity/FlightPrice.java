@@ -48,4 +48,10 @@ public class FlightPrice {
 
     @Column(name = "scraped_at", nullable = false)
     private Instant scrapedAt;
+
+    // Synthetic value for demonstrations; it is not reported by the airline.
+    private Integer simulatedSoldTickets;
+    private Integer simulationCapacity;
+    private String simulationSeed;
+    private String simulationMethod;
 }
