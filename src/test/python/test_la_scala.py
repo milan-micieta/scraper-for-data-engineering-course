@@ -21,15 +21,13 @@ class LaScalaTests(unittest.TestCase):
     def parse(self, row=None):
         return parse_payload({"Table": [self.row if row is None else row]}, "https://example.test", "2026-10-05T12:00:00Z")["events"][0]
 
-    def test_prices_include_sold_out_zones_and_all_tariffs(self):
+    def test_price_range_includes_sold_out_zones_and_all_tariffs(self):
         event = self.parse()
         self.assertEqual(event["title"], "Opera & Ballet Evening")
-        self.assertEqual([p["price"] for p in event["prices"]], ["123.45", "80.00"])
-        self.assertEqual(event["prices"][0]["presaleFee"], "1.00")
-        self.assertIsNone(event["prices"][1]["commission"])
+        self.assertEqual(event["minPrice"], "80.00")
+        self.assertEqual(event["maxPrice"], "123.45")
         self.assertEqual(event["availableSeats"], 0)
         self.assertIsNone(event["soldTickets"])
-        self.assertIsNone(event["minAvailablePrice"])
 
     def test_theatre_local_time_handles_winter_and_summer(self):
         self.assertEqual(self.parse()["startsAt"], "2026-12-06T14:00:00+01:00")

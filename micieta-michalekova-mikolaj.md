@@ -100,6 +100,119 @@ curl.exe -G "http://scraper.svra-windows-desktop-0090.virtual.cloud.tuke.sk/api/
 
 V URL zapisuj medzeru ako `%20` (nie `+`) a čiarku ako `%2C`.
 
+## La Scala: Kafka stream
+
+La Scala sa neposkytuje cez REST API. Po úspešnom scrape aplikácia publikuje
+ceny predstavení priamo do Apache Kafka. Publikovanie je predvolene vypnuté a
+zapína sa premennou:
+
+```text
+SALES_STREAM_ENABLED=true
+```
+
+Použitý Kafka broker a topic:
+
+| Nastavenie | Premenná | Predvolená hodnota |
+|---|---|---|
+| Kafka broker | `KAFKA_BOOTSTRAP_SERVERS` | `127.0.0.1:19092` |
+| Topic | `LASCALA_TOPIC` | `lascala.prices` |
+| Security protocol | `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` |
+| SASL mechanizmus | `KAFKA_SASL_MECHANISM` | `PLAIN` |
+| Používateľ | `KAFKA_USERNAME` | prázdny |
+| Heslo | `KAFKA_PASSWORD` | prázdne |
+
+Broker a port sú konfigurovateľné a nie sú preberané z externých školských
+streamov. Heslo sa nastavuje iba cez environment premennú, nie do zdrojového
+kódu alebo dokumentácie.
+
+### Ako sa správa vytvára
+
+Pri každom úspešnom zbere La Scala sa do topicu odošle jedna JSON správa za
+každé predstavenie. Kafka key je `event_id`, takže správy jedného predstavenia
+majú stabilný kľúč. Správa obsahuje aktuálny snapshot cien:
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "12345",
+  "scraped_at": "2026-10-12T12:05:00Z",
+  "performance": "La traviata",
+  "show_start": "2026-12-06T20:00:00+01:00",
+  "currency": "EUR",
+  "prices": [
+    {
+      "zoneId": "1",
+      "zoneName": "Stalls",
+      "availableSeats": 20,
+      "tariffId": "a",
+      "tariffName": "Full",
+      "price": 123.45,
+      "presaleFee": 1.00,
+      "commission": 0.00
+    }
+  ]
+}
+```
+
+Význam hlavných polí:
+
+| Pole | Význam |
+|---|---|
+| `schema_version` | Verzia formátu; aktuálne `1` |
+| `event_id` | Identifikátor predstavenia a Kafka message key |
+| `scraped_at` | Čas, kedy bol snapshot získaný |
+| `performance` | Názov predstavenia |
+| `show_start` | Začiatok predstavenia vrátane časovej zóny |
+| `currency` | Mena cien, zvyčajne `EUR` |
+| `prices` | Zoznam zón a tarifov s cenou a dostupnosťou |
+
+### Odber dát
+
+Pomocou Kafka konzolového consumeru možno čítať nové aj staršie správy:
+
+```sh
+kafka-console-consumer \
+  --bootstrap-server 127.0.0.1:19092 \
+  --topic lascala.prices \
+  --from-beginning \
+  --group lascala-readers
+```
+
+Vlastný consumer má používať samostatnú `group.id`. Kafka potom uchováva jeho
+offset a po reštarte pokračuje od poslednej potvrdenej pozície. Pri prvom
+spustení použite `auto.offset.reset=earliest`, aby sa načítali aj správy
+publikované pred pripojením consumera.
+
+Príklad v Pythone s balíkom `confluent-kafka`:
+
+```python
+import json
+from confluent_kafka import Consumer
+
+consumer = Consumer({
+    "bootstrap.servers": "127.0.0.1:19092",
+    "group.id": "lascala-readers",
+    "auto.offset.reset": "earliest",
+})
+consumer.subscribe(["lascala.prices"])
+
+try:
+    while True:
+        message = consumer.poll(1.0)
+        if message is None:
+            continue
+        if message.error():
+            print(message.error())
+            continue
+        snapshot = json.loads(message.value())
+        print(snapshot["event_id"], snapshot["performance"], snapshot["prices"])
+finally:
+    consumer.close()
+```
+
+Consumer musí počítať s opakovaným doručením. Správy deduplikujte podľa
+kombinácie `event_id` a `scraped_at`; neznáme nové polia ignorujte.
+
 ## Chybové stavy
 
 | Kód | Kedy nastane |

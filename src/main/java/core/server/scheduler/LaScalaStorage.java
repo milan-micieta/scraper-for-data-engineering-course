@@ -1,6 +1,6 @@
 package core.server.scheduler;
 
-import core.entity.LaScalaEvent;
+import core.entity.LaScala;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Service;
@@ -13,8 +13,8 @@ public class LaScalaStorage {
     private EntityManager entityManager;
 
     @Transactional
-    public void save(List<LaScalaEvent> events) {
-        for (LaScalaEvent event : events) {
+    public void save(List<LaScala> events) {
+        for (LaScala event : events) {
             entityManager.persist(event);
         }
         entityManager.flush();

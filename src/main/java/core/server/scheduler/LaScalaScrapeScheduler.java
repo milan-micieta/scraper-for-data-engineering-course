@@ -1,7 +1,7 @@
 package core.server.scheduler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import core.entity.LaScalaEvent;
+import core.entity.LaScala;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +22,8 @@ public class LaScalaScrapeScheduler {
     private final PythonService python;
     private final LaScalaStorage storage;
     private final LaScalaWebhookNotifier webhookNotifier;
+    private final TicketSalesStreamPublisher salesPublisher;
+    private final LaScalaSalesSimulator salesSimulator;
     private final ObjectMapper mapper;
     private final AtomicBoolean running = new AtomicBoolean();
 
@@ -41,11 +43,15 @@ public class LaScalaScrapeScheduler {
     private long simulationSeed;
 
     public LaScalaScrapeScheduler(PythonService python, LaScalaStorage storage, ObjectMapper mapper,
-                                  LaScalaWebhookNotifier webhookNotifier) {
+                                  LaScalaWebhookNotifier webhookNotifier,
+                                  TicketSalesStreamPublisher salesPublisher,
+                                  LaScalaSalesSimulator salesSimulator) {
         this.python = python;
         this.storage = storage;
         this.mapper = mapper;
         this.webhookNotifier = webhookNotifier;
+        this.salesPublisher = salesPublisher;
+        this.salesSimulator = salesSimulator;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -58,17 +64,13 @@ public class LaScalaScrapeScheduler {
         if (!running.compareAndSet(false, true)) return;
         try {
             List<String> command = new ArrayList<>(List.of(pythonExe, script, "--json"));
-            if (simulateSales) {
-                command.addAll(List.of("--simulate-sales", "--simulation-capacity", String.valueOf(simulationCapacity),
-                        "--simulation-seed", String.valueOf(simulationSeed)));
-            }
             String json = python.run(command, timeout);
             Batch batch = mapper.readValue(json, Batch.class);
             if (batch.scrapedAt() == null || batch.sourceUrl() == null
                     || batch.events() == null || batch.events().isEmpty()) {
                 throw new IllegalArgumentException("Incomplete La Scala response");
             }
-            for (LaScalaEvent event : batch.events()) {
+            for (LaScala event : batch.events()) {
                 if (event.getEventId() == null || event.getTitle() == null || event.getStartsAt() == null
                         || event.getSoldTickets() != null || !"NOT_PUBLISHED".equals(event.getSoldTicketsStatus())) {
                     throw new IllegalArgumentException("Invalid La Scala event");
@@ -76,9 +78,12 @@ public class LaScalaScrapeScheduler {
                 event.setScrapedAt(batch.scrapedAt());
                 event.setSourceUrl(batch.sourceUrl());
             }
+            batch.events().forEach(salesSimulator::simulate);
             storage.save(batch.events());
+            batch.events().forEach(salesPublisher::offerTheatre);
             webhookNotifier.notify(batch.scrapedAt(), batch.sourceUrl(), batch.events());
-            log.info("La Scala: saved {} performance snapshots with zone prices; tickets sold are not published", batch.events().size());
+            log.info("La Scala: saved {} performance snapshots with price range and synthetic sales data",
+                    batch.events().size());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("La Scala scrape interrupted");
@@ -89,5 +94,5 @@ public class LaScalaScrapeScheduler {
         }
     }
 
-    record Batch(Instant scrapedAt, String sourceUrl, List<LaScalaEvent> events) {}
+    record Batch(Instant scrapedAt, String sourceUrl, List<LaScala> events) {}
 }

@@ -1,7 +1,5 @@
 package core.server;
 
-import core.service.EventService;
-import core.service.EventServiceJPA;
 import core.service.FlightPriceService;
 import core.service.FlightPriceServiceJPA;
 import core.service.FlightTicketSalesGenerator;
@@ -36,10 +34,5 @@ public class ScraperServer {
                 seed,
                 defaultIntervalSeconds
         );
-    }
-
-    @Bean
-    public EventService eventService() {
-        return new EventServiceJPA();
     }
 }

@@ -1,2 +1,4 @@
 playwright==1.60.0
 tzdata
+paho-mqtt==2.1.0
+confluent-kafka==2.11.1

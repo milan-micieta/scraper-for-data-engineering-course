@@ -161,6 +161,13 @@ def parse_prices(fragment):
     return result
 
 
+def price_range(prices):
+    values = [Decimal(p["price"]) for p in prices if p.get("price") is not None]
+    if not values:
+        return None, None
+    return format(min(values), ".2f"), format(max(values), ".2f")
+
+
 def parse_payload(payload, source_url, scraped_at=None):
     rows = payload.get("Table") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
@@ -178,14 +185,15 @@ def parse_payload(payload, source_url, scraped_at=None):
         if not title:
             raise ValueError("Missing event title")
         start = rome_aware(datetime.strptime(row["evtDateOffset"], "%d/%m/%Y %H:%M"))
+        prices = parse_prices(row.get("evpTicketPrices"))
+        min_price, max_price = price_range(prices)
         events.append({
             "eventId": str(event_id), "title": title, "category": row.get("navDescr"),
             "startsAt": start.isoformat(), "timeZone": "Europe/Rome",
             "bookingUrl": row.get("linkUrl"),
-            "minAvailablePrice": money(row.get("evpMinTicketPrices")),
+            "minPrice": min_price, "maxPrice": max_price,
             "currency": "EUR", "availableSeats": number(row.get("evpAvailability")),
             "soldTickets": None, "soldTicketsStatus": "NOT_PUBLISHED",
-            "prices": parse_prices(row.get("evpTicketPrices")),
             "rawSource": json.dumps(row, ensure_ascii=False),
         })
     if not events:
