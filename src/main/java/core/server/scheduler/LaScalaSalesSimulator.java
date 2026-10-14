@@ -8,8 +8,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.SplittableRandom;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * Calculates the synthetic sales increment from the change in online
@@ -26,9 +24,11 @@ public class LaScalaSalesSimulator {
     @Value("${lascala.simulation.seed:42}")
     private long seed;
 
-    private final ConcurrentMap<String, Observation> last = new ConcurrentHashMap<>();
+    private final LaScalaStorage storage;
 
-    private record Observation(Integer availableSeats) {}
+    public LaScalaSalesSimulator(LaScalaStorage storage) {
+        this.storage = storage;
+    }
 
     public void simulate(LaScala event) {
         if (!enabled) {
@@ -38,8 +38,10 @@ public class LaScalaSalesSimulator {
             throw new IllegalArgumentException("Cannot generate La Scala sales for an incomplete event");
         }
 
-        Observation previous = last.put(event.getEventId(), new Observation(event.getAvailableSeats()));
-        int sold = soldFromAvailability(previous, event.getAvailableSeats());
+        Integer previousAvailableSeats = storage
+                .findPreviousAvailableSeats(event.getEventId(), event.getScrapedAt())
+                .orElse(null);
+        int sold = soldFromAvailability(previousAvailableSeats, event.getAvailableSeats());
 
         event.setSimulatedSoldTickets(sold);
         event.setSimulatedSoldPrice(soldPrice(event, event.getScrapedAt(), sold));
@@ -48,11 +50,11 @@ public class LaScalaSalesSimulator {
         event.setSimulationMethod(METHOD);
     }
 
-    private static int soldFromAvailability(Observation previous, Integer currentAvailableSeats) {
-        if (previous == null || previous.availableSeats() == null || currentAvailableSeats == null) {
+    private static int soldFromAvailability(Integer previousAvailableSeats, Integer currentAvailableSeats) {
+        if (previousAvailableSeats == null || currentAvailableSeats == null) {
             return 0;
         }
-        return Math.max(0, previous.availableSeats() - currentAvailableSeats);
+        return Math.max(0, previousAvailableSeats - currentAvailableSeats);
     }
 
     private BigDecimal soldPrice(LaScala event, Instant scrapedAt, int sold) {

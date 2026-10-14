@@ -12,9 +12,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Publikuje do Kafky jeden stream o La Scale: jedna správa na predstavenie a zber.
- * Správa obsahuje rozsah zverejnených cien AJ predaje (počet a cena predaných lístkov).
- * Predaje sú SYNTETICKÉ, La Scala ich nezverejňuje (pole sales.synthetic = true).
+ * Publikuje do Kafky jeden stream o La Scale (sales.stream.lascala-snapshot-topic):
+ * jedna správa na predstavenie a zber so VŠETKÝMI poľami entity LaScala vrátane raw_source.
+ * Zodpovedá jednému riadku tabuľky lascala. Prirodzený kľúč pre deduplikáciu je (event_id, scraped_at).
+ *
+ * Polia simulated_* sú SYNTETICKÉ predaje (počet a cena predaných lístkov od predchádzajúceho scrapu),
+ * La Scala skutočné predaje nezverejňuje. Sú null, ak je simulácia vypnutá.
  *
  * Volaj až po uložení do DB. Chyba Kafky nikdy nezhodí zber dát, iba sa zaloguje.
  */
@@ -25,19 +28,18 @@ public class TicketSalesStreamPublisher {
     private final ObjectMapper mapper;
     private final KafkaTemplate<String, String> kafka;
 
-    @Value("${sales.stream.enabled:false}")
+    @Value("${sales.stream.snapshot.enabled:false}")
     private boolean enabled;
-    @Value("${sales.stream.lascala-topic:lascala.prices}")
+    @Value("${sales.stream.lascala-snapshot-topic:lascala.snapshots}")
     private String topic;
-    @Value("${lascala.simulation.seed:42}")
-    private long simulationSeed;
 
     public TicketSalesStreamPublisher(ObjectMapper mapper, KafkaTemplate<String, String> kafka) {
         this.mapper = mapper;
         this.kafka = kafka;
     }
 
-    public void offerTheatre(LaScala event) {
+    /** Všetky dáta z entity LaScala (okrem interného DB id) ako jedna správa. */
+    public void offerSnapshot(LaScala event) {
         if (!enabled) {
             return;
         }
@@ -45,28 +47,37 @@ public class TicketSalesStreamPublisher {
         message.put("schema_version", 1);
         message.put("event_id", event.getEventId());
         message.put("scraped_at", event.getScrapedAt());
-        message.put("performance", event.getTitle());
-        message.put("show_start", event.getStartsAt());
+        message.put("source_url", event.getSourceUrl());
+        message.put("title", event.getTitle());
+        message.put("category", event.getCategory());
+        message.put("starts_at", event.getStartsAt());
+        message.put("time_zone", event.getTimeZone());
+        message.put("booking_url", event.getBookingUrl());
         message.put("currency", event.getCurrency());
         message.put("min_price", event.getMinPrice());
         message.put("max_price", event.getMaxPrice());
-        Map<String, Object> salesBlock = salesBlock(event);
-        if (salesBlock != null) {
-            message.put("sales", salesBlock);
-        }
+        message.put("available_seats", event.getAvailableSeats());
+        message.put("sold_tickets", event.getSoldTickets());
+        message.put("sold_tickets_status", event.getSoldTicketsStatus());
+        message.put("simulated_sold_tickets", event.getSimulatedSoldTickets());
+        message.put("simulated_sold_price", event.getSimulatedSoldPrice());
+        message.put("simulation_capacity", event.getSimulationCapacity());
+        message.put("simulation_seed", event.getSimulationSeed());
+        message.put("simulation_method", event.getSimulationMethod());
+        message.put("raw_source", rawJson(event.getRawSource()));
         publish(event.getEventId(), message);
     }
 
-    private Map<String, Object> salesBlock(LaScala event) {
-        if (event.getSimulatedSoldTickets() == null) {
-            return null;   // simulácia je vypnutá
+    /** raw_source je JSON v texte; pošleme ho ako objekt, a ak sa nedá rozparsovať, ako reťazec. */
+    private Object rawJson(String raw) {
+        if (raw == null) {
+            return null;
         }
-        Map<String, Object> block = new LinkedHashMap<>();
-        block.put("synthetic", true);
-        block.put("simulation_seed", String.valueOf(simulationSeed));
-        block.put("sold_since_last_scrape", event.getSimulatedSoldTickets());
-        block.put("sold_price", event.getSimulatedSoldPrice());
-        return block;
+        try {
+            return mapper.readTree(raw);
+        } catch (Exception e) {
+            return raw;
+        }
     }
 
     private void publish(String key, Map<String, Object> payload) {

@@ -80,7 +80,7 @@ public class LaScalaScrapeScheduler {
             }
             batch.events().forEach(salesSimulator::simulate);
             storage.save(batch.events());
-            batch.events().forEach(salesPublisher::offerTheatre);
+            batch.events().forEach(salesPublisher::offerSnapshot);   // <- nové
             webhookNotifier.notify(batch.scrapedAt(), batch.sourceUrl(), batch.events());
             log.info("La Scala: saved {} performance snapshots with price range and synthetic sales data",
                     batch.events().size());
