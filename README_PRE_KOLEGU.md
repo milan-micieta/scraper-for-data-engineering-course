@@ -193,6 +193,17 @@ Výsledok je zoradený podľa odletu a potom podľa najnovšieho `scrapedAt`.
 Endpoint vracia najviac 500 záznamov. Bez filtrov vráti najnovšie dostupné
 historické záznamy v rámci tohto limitu.
 
+Pre aktuálne aktívne lety, teda budúce odlety, použite:
+
+```text
+GET /api/flight/active-flight-ticket
+```
+
+Tento endpoint vracia najviac 500 záznamov a pre každú kombináciu zdroja,
+trasy a času odletu vyberie iba záznam s najnovším `scrapedAt`. Podporuje
+rovnaké voliteľné parametre `origin`, `destination`, `departureDate` a
+`source`; odlety v minulosti automaticky vynechá.
+
 ### Stav servera
 
 Actuator health je vystavený cez:

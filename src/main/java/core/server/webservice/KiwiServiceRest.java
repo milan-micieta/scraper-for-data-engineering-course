@@ -30,4 +30,15 @@ public class KiwiServiceRest {
                                              @RequestParam(required = false) String source) {
         return flightPriceService.getFlightTicket(origin, destination, departureDate, source);
     }
+
+    @GetMapping("/active-flight-ticket")
+    public List<FlightPrice> getActiveLatestFlightTickets(
+            @RequestParam(required = false) String origin,
+            @RequestParam(required = false) String destination,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate departureDate,
+            @RequestParam(required = false) String source) {
+        return flightPriceService.getActiveLatestFlightTickets(origin, destination, departureDate, source);
+    }
 }
