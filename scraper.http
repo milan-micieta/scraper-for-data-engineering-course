@@ -8,3 +8,9 @@ GET http://147.232.205.238:8081/api/flight/flight-ticket?origin=Vienna%2C%20Aust
 
 ### scraper: história ceny jedného letu
 GET http://scraper.svra-windows-desktop-0090.virtual.cloud.tuke.sk/api/flight/flight-ticket?destination=milan-italy
+
+
+### scraper: história ceny jedného letu
+GET http://scraper.svra-windows-desktop-0090.virtual.cloud.tuke.sk/api/flight/active-flight-ticket
+
+
