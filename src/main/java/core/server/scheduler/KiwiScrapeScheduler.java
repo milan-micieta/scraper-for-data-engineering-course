@@ -3,12 +3,16 @@ package core.server.scheduler;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import core.entity.FlightPrice;
+import core.server.stream.MqttFlightPublisher;
 import core.service.FlightPriceService;
 import core.service.FlightTicketSalesGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -22,6 +26,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Každých N minút (cron) prejde všetky ciele a pre každý z nasledujúcich dní (jednosmerná cesta,
@@ -44,6 +49,12 @@ public class KiwiScrapeScheduler {
     private FlightPriceService flightPriceService;
     private ObjectMapper objectMapper = new ObjectMapper();
     private final FlightTicketSalesGenerator salesGenerator;
+    private final MqttFlightPublisher mqttPublisher;
+    private final ThreadPoolTaskScheduler taskScheduler;
+    private final AtomicBoolean running = new AtomicBoolean();
+
+    @Value("${kiwi.scrape.on-startup:true}")
+    private boolean onStartup;
 
     @Value("${kiwi.scrape.origins:}")
     private List<String> origins;
@@ -68,14 +79,35 @@ public class KiwiScrapeScheduler {
     private long delaySeconds;
 
     public KiwiScrapeScheduler(PythonService pythonService, FlightPriceService flightPriceService,
-                               FlightTicketSalesGenerator salesGenerator) {
+                               FlightTicketSalesGenerator salesGenerator, MqttFlightPublisher mqttPublisher,
+                               ThreadPoolTaskScheduler taskScheduler) {
         this.pythonService = pythonService;
         this.flightPriceService = flightPriceService;
         this.salesGenerator = salesGenerator;
+        this.mqttPublisher = mqttPublisher;
+        this.taskScheduler = taskScheduler;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void startup() {
+        if (onStartup) {
+            taskScheduler.execute(this::scrapeAllRoutes);
+        }
     }
 
     @Scheduled(cron = "${kiwi.scrape.cron:0 */15 * * * *}")
     public void scrapeAllRoutes() {
+        if (!running.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            scrapeAllRoutesInternal();
+        } finally {
+            running.set(false);
+        }
+    }
+
+    private void scrapeAllRoutesInternal() {
         List<String> cleanOrigins = clean(origins);
         List<String> cleanDestinations = clean(destinations);
         if (cleanOrigins.isEmpty() || cleanDestinations.isEmpty()) {
@@ -153,6 +185,7 @@ public class KiwiScrapeScheduler {
         for (FlightPrice fp : entities) {
             log.info("{} -> {} {}: najlacnejšia {} {}", fp.getOrigin(), dest,
                     date, fp.getPrice(), fp.getCurrency());
+            mqttPublisher.publishFlight(fp);   // stream do MQTT (di/{team}/flights)
         }
     }
 

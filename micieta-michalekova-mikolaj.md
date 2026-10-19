@@ -1,8 +1,7 @@
-# Získanie dát z REST API a Apache Kafka
+# Získanie dát z REST API, Apache Kafka, MQTT a RabbitMQ
 
-Tento návod obsahuje iba postupy pre ostatných používateľov, ktorí chcú
-čítať aktuálne dáta o letenkách z REST API alebo snapshoty predstavení La
-Scaly z Apache Kafka.
+Tento návod popisuje postupy na získanie aktuálnych dát o letenkách z REST API,
+snapshotov predstavení La Scaly z Apache Kafka a dát z MQTT a RabbitMQ.
 
 ## REST API: letenky
 
@@ -129,8 +128,8 @@ Príklad nastavenia consumeru:
 }
 ```
 
-Skutočné heslo nepíš do zdrojového kódu. Použi environment premennú alebo
-iný bezpečný spôsob konfigurácie.
+Skutočné heslo sa nezapisuje do zdrojového kódu. Používa sa environment
+premenná alebo iný bezpečný spôsob konfigurácie.
 
 ### Obsah správy
 
@@ -299,11 +298,167 @@ print(f"Aktívnych najnovších eventov: {len(active_latest)}")
 print("Uložené do:", OUT_FILE)
 ```
 
-Pred spustením nainštaluj balík:
+Pred spustením je potrebné nainštalovať balík:
 
 ```powershell
 pip install confluent-kafka
 ```
 
 Skript je určený na načítanie celej histórie s `auto.offset.reset=earliest`.
-Pri bežnom dlhodobom consumeri použi stabilný `group.id` a ukladaj offsety.
+Pri bežnom dlhodobom consumeri sa používa stabilný `group.id` a ukladajú sa
+offsety.
+
+## MQTT: odber dát
+
+Potrebné je Python 3.10+, prihlasovacie údaje k CloudAMQP a **názov skupiny**.
+
+### Názov skupiny
+
+Každá skupina má vlastný názov, napríklad:
+
+```text
+SKUPINA1
+SKUPINA2
+SKUPINA6
+```
+
+Pri čítaní z MQTT sa názov skupiny používa na vytvorenie MQTT `client_id`:
+
+```text
+<názov-skupiny>-consumer      napr. skupina2-consumer
+```
+
+**Každá skupina musí použiť iný názov.** Dve pripojenia s rovnakým MQTT
+`client_id` sa navzájom odpájajú, takže pri zhodnom názve skupiny by
+predchádzajúce pripojenie prestalo prijímať dáta.
+
+### Inštalácia
+
+```powershell
+pip install paho-mqtt
+```
+
+### Použité pripojenie
+
+| Služba | Hostiteľ a port | Používateľ | Odber |
+|---|---|---|---|
+| MQTT/TLS | `swallow.lmq.cloudamqp.com:8883` | `ohcweerr:ohcweerr` | `di/team9/flights`, QoS 1 |
+
+### Spustenie prijímača
+
+Skript sa pri spustení opýta na názov skupiny. Zadá sa napríklad `SKUPINA2`.
+Názov skupiny a ďalšie hodnoty sa dajú zadať aj vopred cez environment
+premenné v aktuálnom PowerShelli:
+
+```powershell
+$env:CLOUDAMQP_CONSUMER_ID = "SKUPINA2"
+$env:CLOUDAMQP_CLIENT_ID = "skupina2-consumer"
+$env:CLOUDAMQP_PASSWORD = "<CloudAMQP heslo>"
+python .\scripts\prijimac_team9.py
+```
+
+Hodnoty pre jednotlivé skupiny:
+
+| Skupina | `CLOUDAMQP_CONSUMER_ID` | `CLOUDAMQP_CLIENT_ID` |
+|---|---|---|
+| SKUPINA1 | `SKUPINA1` | `skupina1-consumer` |
+| SKUPINA2 | `SKUPINA2` | `skupina2-consumer` |
+| SKUPINA6 | `SKUPINA6` | `skupina6-consumer` |
+
+Používateľské meno pre MQTT je v skripte nastavené ako `ohcweerr:ohcweerr`.
+Tým istým skriptom sa spúšťa aj odber z RabbitMQ (pozri nižšie).
+
+### Výstup
+
+Dáta z MQTT sa ukladajú do:
+
+```text
+team9_letenky.jsonl
+```
+
+MQTT broker nemusí spätne doručiť staršie správy, preto má prijímač bežať
+nepretržite.
+
+Skutočné heslo sa nedáva do Git repozitára ani do Markdown súboru, uchováva
+sa bezpečným spôsobom (napr. v environment premennej alebo správcovi hesiel).
+
+## RabbitMQ: odber dát
+
+Potrebné je Python 3.10+, prihlasovacie údaje k CloudAMQP, názov skupiny
+a existujúca queue pre danú skupinu.
+
+### Queue pre každú skupinu
+
+Pre každú skupinu musí byť vytvorená **vlastná RabbitMQ queue** a naviazaná
+na exchange `di.team9.theatre` s binding key `theatre.sales`:
+
+```text
+Exchange:    di.team9.theatre
+Binding key: theatre.sales
+```
+
+Názvy queue:
+
+| Skupina | Queue |
+|---|---|
+| SKUPINA1 | `theatre.SKUPINA1` |
+| SKUPINA2 | `theatre.SKUPINA2` |
+| SKUPINA6 | `theatre.SKUPINA6` |
+
+Názov queue má tvar `theatre.<názov-skupiny>`.
+
+**Každá skupina musí čítať zo svojej queue.** Ak by rovnakú queue čítalo viac
+prijímačov, RabbitMQ rozdelí správy medzi nich a každý dostane len časť.
+Vďaka vlastnej queue pre každú skupinu dostane každá skupina vlastnú kópiu
+každej novej správy.
+
+### Inštalácia
+
+```powershell
+pip install pika
+```
+
+### Použité pripojenie
+
+| Služba | Hostiteľ a port | Používateľ | Odber |
+|---|---|---|---|
+| RabbitMQ/TLS | `swallow.lmq.cloudamqp.com:5671` | `ohcweerr`, vhost `ohcweerr` | `theatre.<názov-skupiny>` |
+
+### Spustenie prijímača
+
+Skript sa pri spustení opýta na názov skupiny (napr. `SKUPINA2`) a číta
+z queue `theatre.SKUPINA2`. Hodnoty sa dajú zadať aj vopred cez environment
+premenné v aktuálnom PowerShelli:
+
+```powershell
+$env:CLOUDAMQP_CONSUMER_ID = "SKUPINA2"
+$env:CLOUDAMQP_QUEUE = "theatre.SKUPINA2"
+$env:CLOUDAMQP_PASSWORD = "<CloudAMQP heslo>"
+python .\scripts\prijimac_team9.py
+```
+
+Hodnoty pre jednotlivé skupiny:
+
+| Skupina | `CLOUDAMQP_CONSUMER_ID` | `CLOUDAMQP_QUEUE` |
+|---|---|---|
+| SKUPINA1 | `SKUPINA1` | `theatre.SKUPINA1` |
+| SKUPINA2 | `SKUPINA2` | `theatre.SKUPINA2` |
+| SKUPINA6 | `SKUPINA6` | `theatre.SKUPINA6` |
+
+Používateľské meno pre RabbitMQ je v skripte nastavené ako `ohcweerr`. Tým
+istým skriptom sa spúšťa aj odber z MQTT (pozri vyššie).
+
+### Výstup
+
+RabbitMQ po potvrdení uloží spracované správy do súboru a odstráni ich
+z queue danej skupiny. Dáta z RabbitMQ sa ukladajú do:
+
+```text
+team9_vstupenky.jsonl
+```
+
+Ak sa skript vypne, správy zostanú vo vlastnej queue skupiny a doručia sa po
+ďalšom spustení.
+
+Skutočné heslo sa nedáva do Git repozitára ani do Markdown súboru, uchováva
+sa bezpečným spôsobom (napr. v environment premennej alebo správcovi hesiel).

@@ -4,13 +4,17 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import core.entity.FlightPrice;
+import core.server.stream.MqttFlightPublisher;
 import core.service.FlightPriceService;
 import core.service.FlightTicketSalesGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -31,6 +35,8 @@ public class RyanairScrapeScheduler {
     private final PythonService python;
     private final FlightPriceService flightPriceService;
     private final FlightTicketSalesGenerator salesGenerator;
+    private final MqttFlightPublisher mqttPublisher;
+    private final ThreadPoolTaskScheduler taskScheduler;
     private final ObjectMapper mapper = new ObjectMapper();
     private final AtomicBoolean running = new AtomicBoolean();
 
@@ -54,12 +60,24 @@ public class RyanairScrapeScheduler {
     private String startDate;
     @Value("${ryanair.scrape.delay-seconds:5.0}")
     private double delaySeconds;
+    @Value("${ryanair.scrape.on-startup:true}")
+    private boolean onStartup;
 
     public RyanairScrapeScheduler(PythonService python, FlightPriceService flightPriceService,
-                                  FlightTicketSalesGenerator salesGenerator) {
+                                  FlightTicketSalesGenerator salesGenerator, MqttFlightPublisher mqttPublisher,
+                                  ThreadPoolTaskScheduler taskScheduler) {
         this.python = python;
         this.flightPriceService = flightPriceService;
         this.salesGenerator = salesGenerator;
+        this.mqttPublisher = mqttPublisher;
+        this.taskScheduler = taskScheduler;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void startup() {
+        if (onStartup) {
+            taskScheduler.execute(this::scrapeAllRoutes);
+        }
     }
 
     @Scheduled(cron = "${ryanair.scrape.cron:0 */15 * * * *}")
@@ -150,6 +168,7 @@ public class RyanairScrapeScheduler {
                 log.info("{} -> {} {}: najlacnejšia {} {}", price.getOrigin(),
                         destinationLabel, price.getDepartureTime().toLocalDate(),
                         price.getPrice(), price.getCurrency());
+                mqttPublisher.publishFlight(price);   // stream do MQTT (di/{team}/flights)
             }
         }
         return prices.size();
